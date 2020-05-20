@@ -1,8 +1,12 @@
 import json
+import threading
+from urllib.parse import urlparse
 
 import requests
+import uamqp
 from paho.mqtt.publish import single
 from requests.auth import HTTPBasicAuth
+from uamqp import authentication
 
 registryIp = "hono.eclipseprojects.io"
 httpAdapterIp = "hono.eclipseprojects.io"
@@ -44,7 +48,31 @@ cmd = f'java -jar hono-cli-*-exec.jar --hono.client.host={amqpNetworkIp} ' \
 print(cmd)
 print()
 
-input("Press Enter to continue...")
+# input("Press Enter to continue...")
+
+
+
+
+def thread_function(name):
+    while True:
+        uri = "amqp://" + amqpNetworkIp + ":15672/telemetry/" + tenantId
+        parsed_url = urlparse(uri)
+        try:
+            message = uamqp.receive_message(uri, auth=authentication.SASLPlain(parsed_url.hostname, "consumer@HONO", "verysecret"))
+            print(message)
+        except Exception as e:
+            pass
+
+
+
+x = threading.Thread(target=thread_function, args=(1,), daemon=True)
+x.start()
+
+
+
+
+
+
 
 # Send HTTP Message
 print("Send Telemetry Message via HTTP")
