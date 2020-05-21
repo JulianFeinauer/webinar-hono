@@ -1,12 +1,14 @@
+from __future__ import print_function, unicode_literals
+
 import json
 import threading
-from urllib.parse import urlparse
+import time
 
 import requests
-import uamqp
 from paho.mqtt.publish import single
+from proton.handlers import MessagingHandler
+from proton.reactor import Container
 from requests.auth import HTTPBasicAuth
-from uamqp import authentication
 
 registryIp = "hono.eclipseprojects.io"
 httpAdapterIp = "hono.eclipseprojects.io"
@@ -39,7 +41,7 @@ else:
     print("Unnable to set Password")
 
 # Now we can start the client application
-print("Start Hono Client now...")
+print("We could use the Hono Client now...")
 print()
 cmd = f'java -jar hono-cli-*-exec.jar --hono.client.host={amqpNetworkIp} ' \
     f'--hono.client.port=15672 --hono.client.username=consumer@HONO ' \
@@ -48,31 +50,48 @@ cmd = f'java -jar hono-cli-*-exec.jar --hono.client.host={amqpNetworkIp} ' \
 print(cmd)
 print()
 
+
 # input("Press Enter to continue...")
 
+class AmqpHandler(MessagingHandler):
+    """
+    Handler for "northbound side" where Messages are received
+    via AMQP.
+    """
+    def __init__(self, server, address):
+        super(AmqpHandler, self).__init__()
+        self.server = server
+        self.address = address
+
+    def on_start(self, event):
+        conn = event.container.connect(self.server, user="consumer@HONO", password="verysecret")
+        event.container.create_receiver(conn, self.address)
+
+    def on_connection_error(self, event):
+        print("Connection Error")
+
+    def on_link_error(self, event):
+        print("Link Error")
+
+    def on_message(self, event):
+        print("Got a message:")
+        print(event.message.body)
 
 
+# Prepare the container
+uri = f'amqp://{amqpNetworkIp}:15672/telemetry'
+address = f'telemetry/{tenantId}'
+print("Using source: " + uri)
+print("Using address: " + address)
+container = Container(AmqpHandler(uri, address))
 
-def thread_function(name):
-    while True:
-        uri = "amqp://" + amqpNetworkIp + ":15672/telemetry/" + tenantId
-        parsed_url = urlparse(uri)
-        try:
-            message = uamqp.receive_message(uri, auth=authentication.SASLPlain(parsed_url.hostname, "consumer@HONO", "verysecret"))
-            print(message)
-        except Exception as e:
-            pass
+# run container in separate thread
+print("Starting (northbound) AMQP Connection...")
+thread = threading.Thread(target=lambda: container.run(), daemon=True)
+thread.start()
 
-
-
-x = threading.Thread(target=thread_function, args=(1,), daemon=True)
-x.start()
-
-
-
-
-
-
+# Give it some time to link
+time.sleep(2)
 
 # Send HTTP Message
 print("Send Telemetry Message via HTTP")
@@ -82,9 +101,19 @@ response = requests.post(f'http://{httpAdapterIp}:8080/telemetry', headers={"con
 
 if response.status_code == 202:
     print("HTTP sent successful")
+else:
+    print("HTTP message not sent")
 
 # Send Message via MQTT
 print("Send Telemetry Message via MQTT")
 single("telemetry", payload=json.dumps({"temp": 17, "transport": "mqtt"}),
        hostname=mqttAdapterIp,
        auth={"username": f'{deviceId}@{tenantId}', "password": devicePassword})
+
+# Wait a bit for the MQTT Message to arrive
+time.sleep(2)
+
+# Stop container
+print("Stopping (northbound) AMQP Connection...")
+container.stop()
+thread.join(timeout=5)

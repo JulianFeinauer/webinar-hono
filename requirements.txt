@@ -1,3 +1,3 @@
 paho-mqtt==1.5.0
 requests==2.21.0
-uamqp==1.2.8
+python-qpid-proton==0.31.0
